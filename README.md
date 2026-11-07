@@ -69,9 +69,22 @@ refreshed it. Live rule addition/removal without a compositor reload worked.
 
 The Nier repository supplies `nier-workspaces-dropdown`. The package installs
 read-only widget files in `/usr/share/nier/plugins/nier.workspaces-dropdown/`.
-It does not change a user's bar configuration. To use the packaged widget,
-link that directory as `~/.config/omarchy/plugins/nier.workspaces-dropdown` and
-replace `omarchy.workspaces` with `nier.workspaces-dropdown` in the bar layout.
-Preserve an existing plugin directory before creating the link.
+Installation and upgrades register the plugin for the installing desktop user and
+replace `omarchy.workspaces` in `~/.config/omarchy/shell.json`. If the stock
+widget is absent, the dropdown is added on the left. Changed preferences are
+backed up alongside `shell.json`. Other widgets and settings are preserved.
+
+The hook identifies the sudo/pkexec or login user, falling back to a single
+graphical session. User-file changes run as that user. If no user can be
+identified (for example in a build container), activation is skipped with a
+message. Custom plugin directories/links are preserved with a warning. Future
+accounts and unrelated users are not modified. To enable it manually or retry:
+
+```sh
+nier-workspaces-dropdown-enable
+```
+
+Omarchy hot-reloads the configuration; run `omarchy restart shell` if needed.
+Uninstalling does not restore the backup or change user preferences.
 
 Build with `NIER_PACKAGE_OUTPUT=/path/to/output bash tests/package.sh`.

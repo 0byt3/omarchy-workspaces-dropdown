@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Package integration and unprivileged repair entry point.
+set -euo pipefail
+plugin=nier.workspaces-dropdown
+[[ ${0##*/} == nier-onedrive-enable ]] && plugin=nier.onedrive
+fail() { printf '%s: %s\n' "$plugin" "$*" >&2; exit 1; }
+if (( EUID == 0 )); then
+  uid=''
+  if [[ ${SUDO_UID:-} =~ ^[0-9]+$ && $SUDO_UID != 0 ]]; then
+    uid=$SUDO_UID
+  elif [[ ${PKEXEC_UID:-} =~ ^[0-9]+$ && $PKEXEC_UID != 0 ]]; then
+    uid=$PKEXEC_UID
+  elif [[ -r /proc/self/loginuid ]]; then
+    read -r candidate < /proc/self/loginuid || :
+    if [[ $candidate =~ ^[0-9]+$ && $candidate != 0 && $candidate != 4294967295 ]]; then uid=$candidate; fi
+  fi
+  if [[ -z $uid ]] && command -v loginctl >/dev/null; then
+    declare -A users=()
+    while read -r session _; do
+      [[ -n $session ]] || continue
+      type=$(loginctl show-session "$session" -p Type --value 2>/dev/null) || continue
+      [[ $type == wayland || $type == x11 ]] || continue
+      class=$(loginctl show-session "$session" -p Class --value 2>/dev/null) || continue
+      [[ $class == user ]] || continue
+      candidate=$(loginctl show-session "$session" -p User --value 2>/dev/null) || continue
+      [[ $candidate =~ ^[0-9]+$ && $candidate != 0 ]] && users[$candidate]=1
+    done < <(loginctl list-sessions --no-legend 2>/dev/null || :)
+    if (( ${#users[@]} == 1 )); then uid=${!users[*]}; fi
+  fi
+  if [[ -z $uid ]]; then
+    printf '%s: no unambiguous installing desktop user; run %s as your desktop user to enable it.\n' "$plugin" "${0##*/}"
+    exit 0
+  fi
+  account=$(getent passwd "$uid") || fail 'Installing account was not found.'
+  IFS=: read -r user _ actual_uid _ _ user_home _ <<< "$account"
+  [[ $actual_uid == "$uid" && $user_home == /* && $user_home != / && $user_home != /root ]] || fail 'Invalid installing account.'
+  [[ -z ${SUDO_USER:-} || $SUDO_USER == "$user" ]] || fail 'Installing user and UID do not match.'
+  exec runuser -u "$user" -- env -u SUDO_USER -u SUDO_UID -u PKEXEC_UID HOME="$user_home" /bin/bash "$(readlink -f "$0")"
+fi
+
+source_dir=/usr/share/nier/plugins/$plugin
+[[ -f $source_dir/manifest.json ]] || fail "Missing packaged plugin: $source_dir"
+config_dir=$HOME/.config/omarchy
+mkdir -p "$config_dir/plugins"
+# Serialize both packages' updates, including a concurrent manual repair.
+exec 9> "$config_dir/.nier-plugin-enable.lock"
+flock 9
+link=$config_dir/plugins/$plugin
+create_link=false
+if [[ -L $link ]]; then
+  target=$(readlink "$link")
+  if [[ $target != "$source_dir" ]]; then
+    # This former OneDrive location is still shipped as compatibility links.
+    [[ $plugin == nier.onedrive && $target == /usr/share/onedrive-quickshell ]] || fail "Custom plugin link preserved: $link"
+  fi
+elif [[ -e $link ]]; then
+  fail "Existing plugin directory preserved: $link"
+else
+  create_link=true
+fi
+config=$config_dir/shell.json
+[[ ! -L $config || -e $config ]] || fail 'shell.json is a dangling symlink.'
+# Keep a user's shell.json symlink intact.
+config=$(realpath -m "$config")
+input=$config
+[[ -e $input ]] || input=/usr/share/omarchy/config/omarchy/shell.json
+[[ -f $input ]] || fail 'No shell.json or Omarchy default configuration was found.'
+stage=$(mktemp -d "$config_dir/.nier-plugin-enable.XXXXXX")
+linked=false
+cleanup() {
+  if [[ $linked == true ]]; then rm -- "$link"; fi
+  rm -rf -- "$stage"
+}
+trap cleanup EXIT
+cp -- "$input" "$stage/before"
+jq --arg plugin "$plugin" '
+  def widgetid: if type == "string" then . elif type == "object" then .id else null end;
+  if type != "object" then error("shell.json must be an object") else . end |
+  .bar = (.bar // {}) |
+  if (.bar | type) != "object" then error("bar must be an object") else . end |
+  .bar.layout = (.bar.layout // {}) |
+  if (.bar.layout | type) != "object" then error("bar.layout must be an object") else . end |
+  if any(.bar.layout[]; type != "array") then error("bar sections must be arrays") else . end |
+  if any(.bar.layout[][]; widgetid == $plugin) then .
+  elif $plugin == "nier.workspaces-dropdown" then
+    if any(.bar.layout[][]; widgetid == "omarchy.workspaces") then
+      .bar.layout |= with_entries(.value |= map(
+        if widgetid == "omarchy.workspaces" then
+          if type == "string" then $plugin else .id = $plugin end
+        else . end))
+    else .bar.layout.left = ([ $plugin ] + (.bar.layout.left // [])) end
+  else .bar.layout.right = ((.bar.layout.right // []) + [ $plugin ]) end |
+  if has("disabledPlugins") then
+    if (.disabledPlugins | type) != "array" then error("disabledPlugins must be an array")
+    else .disabledPlugins |= map(select(. != $plugin)) end
+  else . end
+' "$stage/before" > "$stage/after"
+# Reject an edit made while preparing the update.
+cmp -s "$input" "$stage/before" || fail 'shell.json changed concurrently; retry enabling the widget.'
+if [[ $create_link == true ]]; then
+  ln -s -- "$source_dir" "$link"
+  linked=true
+fi
+if ! diff -q <(jq -S . "$stage/before") <(jq -S . "$stage/after") >/dev/null; then
+  if [[ -e $config ]]; then
+    backup=$(mktemp "$config.before-$plugin.XXXXXX")
+    cp -p -- "$config" "$backup"
+    printf '%s: preferences backed up to %s\n' "$plugin" "$backup"
+  fi
+  mkdir -p -- "$(dirname "$config")"
+  pending=$(mktemp "${config}.nier.XXXXXX")
+  if [[ -e $config ]]; then chmod --reference="$config" "$pending"; fi
+  if ! cat "$stage/after" > "$pending" || ! mv -f -- "$pending" "$config"; then
+    rm -f -- "$pending"
+    fail 'Could not save shell.json.'
+  fi
+elif [[ ! -e $config ]]; then
+  cp -- "$stage/after" "$config"
+fi
+linked=false
+printf '%s: enabled; Omarchy reloads the bar automatically.\n' "$plugin"
