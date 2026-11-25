@@ -46,6 +46,13 @@ function sortedWorkspaces(values) {
   return result
 }
 
+// Compare connector names rather than object identity; monitor data can refresh.
+function monitorWorkspaces(values, monitorName) {
+  return sortedWorkspaces(values.filter(function(workspace) {
+    return monitorName !== "" && workspace && workspace.monitor && workspace.monitor.name === monitorName
+  }))
+}
+
 function selector(workspace) {
   return numbered(workspace) ? String(workspace.id) : "name:" + workspace.name
 }

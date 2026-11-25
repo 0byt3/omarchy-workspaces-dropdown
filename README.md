@@ -5,7 +5,11 @@ dropdown for selecting another workspace.
 
 ## Behavior
 
-- The bar shows the active workspace's numeric ID, or its name for a named
+- Each widget lists only existing workspaces currently assigned to its own
+  monitor. The dropdown shows the monitor's connector name at the top (for
+  example, `DP-1`) beside a thin widescreen SVG icon. Workspace moves and
+  monitor changes update the list.
+- The bar shows its own monitor's active workspace's numeric ID, or its name for a named
   workspace. Renamed numbered workspaces still display their numeric ID.
 - Left-click the label to open or close the dropdown.
 - Every row is labeled `workspace: <number or name>`. Existing numbered and
@@ -16,7 +20,10 @@ dropdown for selecting another workspace.
 - Lists longer than 10 workspaces have 10 entries per page, with Previous/Next
   controls and a page indicator. Opening the dropdown shows the active
   workspace's page. Unavailable navigation controls are disabled.
-- The active row is bold. Pages can scroll on smaller screens. Clicking outside dismisses the
+- The active row is bold and uses the same theme-controlled selected-item
+  marker/fill as the audio device rows. Workspace and navigation rows use
+  Omarchy's shared `CursorSurface` hover styling. The monitor heading is not
+  selectable. Pages can scroll on smaller screens. Clicking outside dismisses the
   popup using Omarchy's shared popup behavior.
 - Special overlay workspaces are excluded. The plugin lists workspaces
   exposed by Hyprland, including existing persistent workspaces; it does not
@@ -52,7 +59,7 @@ saved at `~/.local/state/nier-workspaces-dropdown/shell.before-deploy.json`.
 The test requires a running Hyprland session, Quickshell, and installed Omarchy
 UI modules (`OMARCHY_SHELL` overrides `/usr/share/omarchy/shell`). It loads the
 real widget in an isolated harness and checks active labels, numeric/named
-sorting, special-workspace filtering, pagination, sizing, and escaped selection commands.
+sorting, monitor and special-workspace filtering, pagination, sizing, and escaped selection commands.
 Workspace dispatches are captured by a mock bar; tests do not change the live
 bar or switch workspaces.
 

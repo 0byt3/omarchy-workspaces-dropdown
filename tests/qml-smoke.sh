@@ -37,7 +37,24 @@ ShellRoot {
     function releasePopout(owner) { if (activePopout === owner) activePopout = null }
     function run(command) { lastCommand = command }
   }
-  Plugin.Workspaces { id: widget; bar: mockBar }
+  PanelWindow {
+    id: testWindow
+    screen: Quickshell.screens[0]
+    implicitWidth: 1
+    implicitHeight: 1
+    color: "transparent"
+    exclusiveZone: 0
+    Plugin.Workspaces { id: widget; bar: mockBar }
+  }
+  PanelWindow {
+    id: otherWindow
+    screen: Quickshell.screens[Quickshell.screens.length - 1]
+    implicitWidth: 1
+    implicitHeight: 1
+    color: "transparent"
+    exclusiveZone: 0
+    Plugin.Workspaces { id: otherWidget; bar: mockBar }
+  }
   Timer {
     interval: 600; running: true
     onTriggered: {
@@ -59,7 +76,34 @@ ShellRoot {
         check(Model.label(null) === "", "no active workspace")
         check(Model.selector({id: -1337, name: "Development"}) === "name:Development", "named selector")
         check(Model.luaQuote('A"B\\C\n') === '"A\\"B\\\\C\\010"', "Lua quoting")
-        check(widget.activeLabel === Model.label(Hyprland.focusedWorkspace), "live active workspace binding")
+        var monitorA = {name: "DP-1"}, monitorB = {name: "HDMI-A-1"}
+        var assigned = [
+          {id: 12, name: "12", monitor: monitorB},
+          {id: 2, name: "2", monitor: monitorA},
+          {id: -10, name: "Desk", monitor: monitorA},
+          {id: -99, name: "special:scratch", monitor: monitorA},
+          {id: 3, name: "3", monitor: null}
+        ]
+        check(Model.monitorWorkspaces(assigned, "DP-1").map(function(w) { return w.id }).join(",") === "2,-10", "only this monitor, naturally sorted")
+        check(Model.monitorWorkspaces(assigned, "HDMI-A-1")[0].id === 12, "other monitor independent")
+        check(Model.monitorWorkspaces(assigned, "").length === 0, "no monitor shows no workspaces")
+        assigned[0].monitor = {name: "DP-1"}
+        check(Model.monitorWorkspaces(assigned, "DP-1").length === 3, "moved workspace and refreshed monitor object")
+        check(Model.monitorWorkspaces(assigned, "HDMI-A-1").length === 0, "empty monitor")
+        var screenMonitor = Hyprland.monitorFor(testWindow.screen)
+        check(screenMonitor !== null, "test screen has a Hyprland monitor")
+        check(widget.monitorName === screenMonitor.name, "widget resolves its containing screen")
+        check(widget.activeLabel === Model.label(screenMonitor.activeWorkspace), "monitor-local active workspace binding")
+        check(widget.workspaceEntries.every(function(w) { return w.monitor.name === widget.monitorName }), "live entries belong to widget monitor")
+        var otherMonitor = Hyprland.monitorFor(otherWindow.screen)
+        check(otherWidget.monitorName === otherMonitor.name, "second widget resolves its own screen")
+        check(otherWidget.activeLabel === Model.label(otherMonitor.activeWorkspace), "second widget has independent active workspace")
+        check(otherWidget.workspaceEntries.every(function(w) { return w.monitor.name === otherMonitor.name }), "second widget filters independently")
+        if (screenMonitor.name !== otherMonitor.name) {
+          check(widget.workspaceEntries.every(function(w) {
+            return !otherWidget.workspaceEntries.some(function(other) { return other.id === w.id })
+          }), "different monitors have disjoint workspace lists")
+        }
         check(widget.implicitWidth > 0 && widget.implicitHeight > 0, "bar sizing")
         var many = []
         for (var i = 1; i <= 21; i++) many.push({id: i, name: String(i)})
@@ -85,11 +129,11 @@ ShellRoot {
         check(mockBar.lastCommand === "hyprctl dispatch " + Util.shellQuote('hl.dsp.focus({ workspace = "12" })'), "numbered dispatch")
         mockBar.vertical = true
         check(widget.implicitWidth === mockBar.barSize, "vertical sizing")
-        console.log("PASS: widget loads, active label, natural sorting, pagination, named/numbered dispatch and quoting")
+        console.log("PASS: widget loads, monitor-local active label/filtering, natural sorting, pagination, named/numbered dispatch and quoting")
         Qt.quit()
       } catch (error) {
         console.error("FAIL: " + error.message)
-        Qt.quit(1)
+        Qt.quit()
       }
     }
   }
